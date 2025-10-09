@@ -17,7 +17,7 @@ record Config(
         Objects.requireNonNull(fileExtension, "File extension cannot be null");
 
         if (fileExtension.trim().isEmpty()) {
-            throw new IllegalArgumentException("File extension cannot be empty");
+            notifyAndQuit("File extension cannot be empty");
         }
     }
 
@@ -152,6 +152,12 @@ static void error(String message) {
     System.err.println(message);
 }
 
+static void notifyAndQuit(String message) {
+    error("Error: " + message);
+    error("\nUse --help for usage information.");
+    System.exit(1);
+}
+
 void displayHelp() {
     info("""
             ZFSL - Zero Dependencies File Selection and Copy Tool
@@ -195,27 +201,27 @@ Config parseArguments(String[] args) {
             }
             case "-s", "--source" -> {
                 if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Source directory argument requires a value");
+                    notifyAndQuit("Source directory argument requires a value");
                 }
                 sourceDirectory = Path.of(args[++i]);
             }
             case "-t", "--target" -> {
                 if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("Target directory argument requires a value");
+                    notifyAndQuit("Target directory argument requires a value");
                 }
                 targetDirectory = Path.of(args[++i]);
             }
             case "-e", "--extension" -> {
                 if (i + 1 >= args.length) {
-                    throw new IllegalArgumentException("File extension argument requires a value");
+                    notifyAndQuit("File extension argument requires a value");
                 }
                 fileExtension = args[++i];
             }
             default -> {
                 if (args[i].startsWith("-")) {
-                    throw new IllegalArgumentException("Unknown option: " + args[i]);
+                    notifyAndQuit("Unknown option: " + args[i]);
                 } else {
-                    throw new IllegalArgumentException("Unexpected argument: " + args[i]);
+                    notifyAndQuit("Unexpected argument: " + args[i]);
                 }
             }
         }
@@ -225,7 +231,7 @@ Config parseArguments(String[] args) {
     if (targetDirectory == null) {
         var targetInput = promptForInput("Enter target directory");
         if (targetInput.isEmpty()) {
-            throw new IllegalArgumentException("Target directory cannot be empty");
+            notifyAndQuit("Target directory cannot be empty");
         }
         targetDirectory = Path.of(targetInput);
     }
@@ -233,7 +239,7 @@ Config parseArguments(String[] args) {
     if (fileExtension == null) {
         var extensionInput = promptForInput("Enter file extension (e.g., .java, txt)");
         if (extensionInput.isEmpty()) {
-            throw new IllegalArgumentException("File extension cannot be empty");
+            notifyAndQuit("File extension cannot be empty");
         }
         fileExtension = extensionInput;
     }
@@ -244,39 +250,33 @@ Config parseArguments(String[] args) {
 void validateConfiguration(Config config) {
     if (!config.isSourceValid()) {
         if (!Files.exists(config.sourceDirectory())) {
-            throw new IllegalArgumentException(
-                    "Source directory does not exist: " + config.sourceDirectory());
+            notifyAndQuit("Source directory does not exist: " + config.sourceDirectory());
         }
         if (!Files.isDirectory(config.sourceDirectory())) {
-            throw new IllegalArgumentException(
-                    "Source path is not a directory: " + config.sourceDirectory());
+            notifyAndQuit("Source path is not a directory: " + config.sourceDirectory());
         }
         if (!Files.isReadable(config.sourceDirectory())) {
-            throw new IllegalArgumentException(
-                    "Source directory is not readable: " + config.sourceDirectory());
+            notifyAndQuit("Source directory is not readable: " + config.sourceDirectory());
         }
     }
 
     if (!config.isTargetValid()) {
         if (Files.exists(config.targetDirectory()) && !Files.isDirectory(config.targetDirectory())) {
-            throw new IllegalArgumentException(
-                    "Target path exists but is not a directory: " + config.targetDirectory());
+            notifyAndQuit("Target path exists but is not a directory: " + config.targetDirectory());
         }
         if (Files.exists(config.targetDirectory()) && !Files.isWritable(config.targetDirectory())) {
-            throw new IllegalArgumentException(
-                    "Target directory is not writable: " + config.targetDirectory());
+            notifyAndQuit("Target directory is not writable: " + config.targetDirectory());
         }
         var parent = config.targetDirectory().getParent();
         if (parent != null && (!Files.exists(parent) || !Files.isWritable(parent))) {
-            throw new IllegalArgumentException(
-                    "Cannot create target directory (parent not writable): " + config.targetDirectory());
+            notifyAndQuit("Cannot create target directory (parent not writable): " + config.targetDirectory());
         }
     }
 
     // Validate file extension format
     var extension = config.normalizedExtension();
     if (extension.length() <= 1) {
-        throw new IllegalArgumentException("File extension must contain at least one character after the dot");
+        notifyAndQuit("File extension must contain at least one character after the dot");
     }
 }
 
@@ -416,7 +416,10 @@ UserAction processUserDecision(String response, Path filePath) {
         case "y" -> new UserAction.Copy(filePath);
         case "n" -> new UserAction.Skip(filePath);
         case "q" -> new UserAction.Quit(filePath);
-        default -> throw new IllegalArgumentException("Invalid response: " + response);
+        default -> {
+            notifyAndQuit("Invalid response: " + response);
+            yield null; // unreachable, but required for compilation
+        }
     };
 }
 
@@ -537,7 +540,7 @@ OperationResult.Error handleCopyError(Path sourceFile, IOException error) {
     return new OperationResult.Error(sourceFile, errorMessage, error);
 }
 
-void main(String[] args) {
+void main(String[] args) throws Exception{
     info("ZFSL - Zero Dependencies File Selection and Copy Tool");
     info("====================================================");
 
@@ -549,7 +552,6 @@ void main(String[] args) {
         System.exit(1);
     }
 
-    try {
         var config = parseArguments(args);
         validateConfiguration(config);
 
@@ -621,13 +623,4 @@ void main(String[] args) {
         // Display comprehensive operation summary with detailed error reporting
         state.displaySummary();
 
-    } catch (IllegalArgumentException e) {
-        error("Error: " + e.getMessage());
-        error("\nUse --help for usage information.");
-        System.exit(1);
-    } catch (Exception e) {
-        error("Unexpected error: " + e.getMessage());
-        e.printStackTrace();
-        System.exit(1);
-    }
 }
