@@ -1,450 +1,633 @@
-import java.nio.file.*;
-import java.util.*;
-import java.util.stream.*;
-import java.io.IOException;
 
 /**
  * Zero Dependencies File Selection and Copy Tool (zFSL)
  * Interactive CLI application for selective file copying
  */
-public class ZFSL {
 
-    record Config(
-            Path sourceDirectory,
-            Path targetDirectory,
-            String fileExtension) {
-        public Config{Objects.requireNonNull(sourceDirectory,"Source directory cannot be null");Objects.requireNonNull(targetDirectory,"Target directory cannot be null");Objects.requireNonNull(fileExtension,"File extension cannot be null");
+import java.nio.file.*;
 
-        if(fileExtension.trim().isEmpty()){throw new IllegalArgumentException("File extension cannot be empty");}}
 
-        boolean isSourceValid() {
-            return Files.exists(sourceDirectory) && Files.isDirectory(sourceDirectory)
-                    && Files.isReadable(sourceDirectory);
+record Config(
+        Path sourceDirectory,
+        Path targetDirectory,
+        String fileExtension) {
+    public Config {
+        Objects.requireNonNull(sourceDirectory, "Source directory cannot be null");
+        Objects.requireNonNull(targetDirectory, "Target directory cannot be null");
+        Objects.requireNonNull(fileExtension, "File extension cannot be null");
+
+        if (fileExtension.trim().isEmpty()) {
+            throw new IllegalArgumentException("File extension cannot be empty");
         }
+    }
 
-        boolean isTargetValid() {
-            if (Files.exists(targetDirectory)) {
-                return Files.isDirectory(targetDirectory) && Files.isWritable(targetDirectory);
+    boolean isSourceValid() {
+        return Files.exists(sourceDirectory) && Files.isDirectory(sourceDirectory)
+                && Files.isReadable(sourceDirectory);
+    }
+
+    boolean isTargetValid() {
+        if (Files.exists(targetDirectory)) {
+            return Files.isDirectory(targetDirectory) && Files.isWritable(targetDirectory);
+        }
+        // Check if parent directory exists and is writable for creation
+        var parent = targetDirectory.getParent();
+        return parent != null && Files.exists(parent) && Files.isWritable(parent);
+    }
+
+    String normalizedExtension() {
+        return fileExtension.startsWith(".") ? fileExtension : "." + fileExtension;
+    }
+}
+
+sealed interface OperationResult
+        permits OperationResult.Success, OperationResult.Skip, OperationResult.Error {
+
+    record Success(Path source, Path target) implements OperationResult {
+    }
+
+    record Skip(Path source, String reason) implements OperationResult {
+    }
+
+    record Error(Path source, String message, Throwable cause) implements OperationResult {
+    }
+}
+
+record ProcessingState(
+        int totalFiles,
+        int copiedFiles,
+        int skippedFiles,
+        int errorFiles,
+        List<OperationResult> results) {
+    static ProcessingState initial() {
+        return new ProcessingState(0, 0, 0, 0, new ArrayList<>());
+    }
+
+    ProcessingState withTotalFiles(int total) {
+        return new ProcessingState(total, copiedFiles, skippedFiles, errorFiles, results);
+    }
+
+    ProcessingState withResult(OperationResult result) {
+        var newResults = new ArrayList<>(results);
+        newResults.add(result);
+
+        return switch (result) {
+            case OperationResult.Success success ->
+                new ProcessingState(totalFiles, copiedFiles + 1, skippedFiles, errorFiles, newResults);
+            case OperationResult.Skip skip ->
+                new ProcessingState(totalFiles, copiedFiles, skippedFiles + 1, errorFiles, newResults);
+            case OperationResult.Error error ->
+                new ProcessingState(totalFiles, copiedFiles, skippedFiles, errorFiles + 1, newResults);
+        };
+    }
+
+    String formatSummary() {
+        return """
+
+                Operation Summary:
+                ================
+                Total files found: %d
+                Files copied: %d
+                Files skipped: %d
+                Files with errors: %d
+                """.formatted(totalFiles, copiedFiles, skippedFiles, errorFiles);
+    }
+
+    void displaySummary() {
+        info(formatSummary());
+
+        // Display detailed error reporting if there were any errors
+        if (errorFiles > 0) {
+            displayDetailedErrorReport();
+        }
+    }
+
+    void displayDetailedErrorReport() {
+        info("Detailed Error Report:");
+        info("=====================");
+
+        var errorResults = results.stream()
+                .filter(result -> result instanceof OperationResult.Error)
+                .map(result -> (OperationResult.Error) result)
+                .toList();
+
+        for (var i = 0; i < errorResults.size(); i++) {
+            var error = errorResults.get(i);
+            info("""
+                    Error %d:
+                    --------
+                    File: %s
+                    Issue: %s
+                    """.formatted(i + 1, error.source(), error.message()));
+
+            if (error.cause() != null) {
+                info("Technical details: " + error.cause().getMessage());
             }
-            // Check if parent directory exists and is writable for creation
-            var parent = targetDirectory.getParent();
-            return parent != null && Files.exists(parent) && Files.isWritable(parent);
-        }
 
-        String normalizedExtension() {
-            return fileExtension.startsWith(".") ? fileExtension : "." + fileExtension;
-        }
-    }
-
-    sealed interface OperationResult
-            permits OperationResult.Success, OperationResult.Skip, OperationResult.Error {
-
-        record Success(Path source, Path target) implements OperationResult {
-        }
-
-        record Skip(Path source, String reason) implements OperationResult {
-        }
-
-        record Error(Path source, String message, Throwable cause) implements OperationResult {
-        }
-    }
-
-    record ProcessingState(
-            int totalFiles,
-            int copiedFiles,
-            int skippedFiles,
-            int errorFiles,
-            List<OperationResult> results) {
-        static ProcessingState initial() {
-            return new ProcessingState(0, 0, 0, 0, new ArrayList<>());
-        }
-
-        ProcessingState withTotalFiles(int total) {
-            return new ProcessingState(total, copiedFiles, skippedFiles, errorFiles, results);
-        }
-
-        ProcessingState withResult(OperationResult result) {
-            var newResults = new ArrayList<>(results);
-            newResults.add(result);
-
-            return switch (result) {
-                case OperationResult.Success success ->
-                    new ProcessingState(totalFiles, copiedFiles + 1, skippedFiles, errorFiles, newResults);
-                case OperationResult.Skip skip ->
-                    new ProcessingState(totalFiles, copiedFiles, skippedFiles + 1, errorFiles, newResults);
-                case OperationResult.Error error ->
-                    new ProcessingState(totalFiles, copiedFiles, skippedFiles, errorFiles + 1, newResults);
-            };
-        }
-
-        String formatSummary() {
-            return """
-
-                    Operation Summary:
-                    ================
-                    Total files found: %d
-                    Files copied: %d
-                    Files skipped: %d
-                    Files with errors: %d
-                    """.formatted(totalFiles, copiedFiles, skippedFiles, errorFiles);
-        }
-    }
-
-    sealed interface UserAction
-            permits UserAction.Copy, UserAction.Skip, UserAction.Quit {
-
-        record Copy(Path filePath) implements UserAction {
-        }
-
-        record Skip(Path filePath) implements UserAction {
-        }
-
-        record Quit(Path filePath) implements UserAction {
-        }
-    }
-
-    static void displayHelp() {
-        System.out.println("""
-                ZFSL - Zero Dependencies File Selection and Copy Tool
-                ====================================================
-
-                Usage: java ZFSL.java [OPTIONS]
-
-                Options:
-                  -s, --source <directory>     Source directory to search (default: current directory)
-                  -t, --target <directory>     Target directory for copying files (required if not prompted)
-                  -e, --extension <extension>  File extension to search for (required if not prompted)
-                  -h, --help                   Display this help message
-
-                Examples:
-                  java ZFSL.java                                    # Interactive mode with prompts
-                  java ZFSL.java -s /path/to/source -t /path/to/target -e .java
-                  java ZFSL.java --source ./src --target ./backup --extension txt
-
-                Interactive Mode:
-                  If target directory or file extension are not provided, you will be prompted
-                  to enter them interactively.
-                """);
-    }
-
-    static String promptForInput(String prompt) {
-        var console = System.console();
-        if (console != null) {
-            var input = console.readLine(prompt + ": ");
-            return input != null ? input.trim() : "";
-        } else {
-            // Fallback for environments without console (like IDEs)
-            System.out.print(prompt + ": ");
-            try (var scanner = new Scanner(System.in)) {
-                return scanner.nextLine().trim();
+            if (i < errorResults.size() - 1) {
+                info(""); // Add spacing between errors
             }
         }
     }
+}
 
-    static Config parseArguments(String[] args) {
-        var sourceDirectory = Path.of(System.getProperty("user.dir")); // Default to current directory
-        var targetDirectory = (Path) null;
-        var fileExtension = (String) null;
+sealed interface UserAction
+        permits UserAction.Copy, UserAction.Skip, UserAction.Quit {
 
-        // Parse arguments using modern switch expressions
-        for (var i = 0; i < args.length; i++) {
-            switch (args[i]) {
-                case "-h", "--help" -> {
-                    displayHelp();
-                    System.exit(0);
+    record Copy(Path filePath) implements UserAction {
+    }
+
+    record Skip(Path filePath) implements UserAction {
+    }
+
+    record Quit(Path filePath) implements UserAction {
+    }
+}
+
+static void info(String message) {
+    System.out.println(message);
+}
+
+static void error(String message) {
+    System.err.println(message);
+}
+
+void displayHelp() {
+    info("""
+            ZFSL - Zero Dependencies File Selection and Copy Tool
+            ====================================================
+
+            Usage: java ZFSL.java [OPTIONS]
+
+            Options:
+              -s, --source <directory>     Source directory to search (default: current directory)
+              -t, --target <directory>     Target directory for copying files (required if not prompted)
+              -e, --extension <extension>  File extension to search for (required if not prompted)
+              -h, --help                   Display this help message
+
+            Examples:
+              java ZFSL.java                                    # Interactive mode with prompts
+              java ZFSL.java -s /path/to/source -t /path/to/target -e .java
+              java ZFSL.java --source ./src --target ./backup --extension txt
+
+            Interactive Mode:
+              If target directory or file extension are not provided, you will be prompted
+              to enter them interactively.
+            """);
+}
+
+String promptForInput(String prompt) {
+    var input = System.console().readLine(prompt + ": ");
+    return input != null ? input.trim() : "";
+}
+
+Config parseArguments(String[] args) {
+    var sourceDirectory = Path.of(System.getProperty("user.dir")); // Default to current directory
+    var targetDirectory = (Path) null;
+    var fileExtension = (String) null;
+
+    // Parse arguments using modern switch expressions
+    for (var i = 0; i < args.length; i++) {
+        switch (args[i]) {
+            case "-h", "--help" -> {
+                displayHelp();
+                System.exit(0);
+            }
+            case "-s", "--source" -> {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("Source directory argument requires a value");
                 }
-                case "-s", "--source" -> {
-                    if (i + 1 >= args.length) {
-                        throw new IllegalArgumentException("Source directory argument requires a value");
-                    }
-                    sourceDirectory = Path.of(args[++i]);
+                sourceDirectory = Path.of(args[++i]);
+            }
+            case "-t", "--target" -> {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("Target directory argument requires a value");
                 }
-                case "-t", "--target" -> {
-                    if (i + 1 >= args.length) {
-                        throw new IllegalArgumentException("Target directory argument requires a value");
-                    }
-                    targetDirectory = Path.of(args[++i]);
+                targetDirectory = Path.of(args[++i]);
+            }
+            case "-e", "--extension" -> {
+                if (i + 1 >= args.length) {
+                    throw new IllegalArgumentException("File extension argument requires a value");
                 }
-                case "-e", "--extension" -> {
-                    if (i + 1 >= args.length) {
-                        throw new IllegalArgumentException("File extension argument requires a value");
-                    }
-                    fileExtension = args[++i];
+                fileExtension = args[++i];
+            }
+            default -> {
+                if (args[i].startsWith("-")) {
+                    throw new IllegalArgumentException("Unknown option: " + args[i]);
+                } else {
+                    throw new IllegalArgumentException("Unexpected argument: " + args[i]);
+                }
+            }
+        }
+    }
+
+    // Prompt for missing required values
+    if (targetDirectory == null) {
+        var targetInput = promptForInput("Enter target directory");
+        if (targetInput.isEmpty()) {
+            throw new IllegalArgumentException("Target directory cannot be empty");
+        }
+        targetDirectory = Path.of(targetInput);
+    }
+
+    if (fileExtension == null) {
+        var extensionInput = promptForInput("Enter file extension (e.g., .java, txt)");
+        if (extensionInput.isEmpty()) {
+            throw new IllegalArgumentException("File extension cannot be empty");
+        }
+        fileExtension = extensionInput;
+    }
+
+    return new Config(sourceDirectory, targetDirectory, fileExtension);
+}
+
+void validateConfiguration(Config config) {
+    if (!config.isSourceValid()) {
+        if (!Files.exists(config.sourceDirectory())) {
+            throw new IllegalArgumentException(
+                    "Source directory does not exist: " + config.sourceDirectory());
+        }
+        if (!Files.isDirectory(config.sourceDirectory())) {
+            throw new IllegalArgumentException(
+                    "Source path is not a directory: " + config.sourceDirectory());
+        }
+        if (!Files.isReadable(config.sourceDirectory())) {
+            throw new IllegalArgumentException(
+                    "Source directory is not readable: " + config.sourceDirectory());
+        }
+    }
+
+    if (!config.isTargetValid()) {
+        if (Files.exists(config.targetDirectory()) && !Files.isDirectory(config.targetDirectory())) {
+            throw new IllegalArgumentException(
+                    "Target path exists but is not a directory: " + config.targetDirectory());
+        }
+        if (Files.exists(config.targetDirectory()) && !Files.isWritable(config.targetDirectory())) {
+            throw new IllegalArgumentException(
+                    "Target directory is not writable: " + config.targetDirectory());
+        }
+        var parent = config.targetDirectory().getParent();
+        if (parent != null && (!Files.exists(parent) || !Files.isWritable(parent))) {
+            throw new IllegalArgumentException(
+                    "Cannot create target directory (parent not writable): " + config.targetDirectory());
+        }
+    }
+
+    // Validate file extension format
+    var extension = config.normalizedExtension();
+    if (extension.length() <= 1) {
+        throw new IllegalArgumentException("File extension must contain at least one character after the dot");
+    }
+}
+
+List<Path> discoverFiles(Config config) {
+    var extension = config.normalizedExtension();
+    var sourceDir = config.sourceDirectory();
+
+    try (var fileStream = Files.walk(sourceDir)) {
+        return fileStream
+                .filter(Files::isRegularFile)
+                .filter(path -> {
+                    var fileName = path.getFileName().toString();
+                    return fileName.endsWith(extension);
+                })
+                .toList();
+
+    } catch (IOException e) {
+        handleFileDiscoveryError(sourceDir, e);
+        return List.of();
+    }
+}
+
+void handleFileDiscoveryError(Path sourceDir, IOException error) {
+    var errorMessage = switch (error.getClass().getSimpleName()) {
+        case "AccessDeniedException" ->
+            "Access denied while searching directory: " + sourceDir +
+                    "\nCheck file permissions and try again.";
+        case "NoSuchFileException" ->
+            "Directory not found: " + sourceDir +
+                    "\nVerify the path exists and try again.";
+        case "FileSystemException" ->
+            "File system error while accessing: " + sourceDir +
+                    "\nThe directory may be on an unavailable network drive or corrupted file system.";
+        default ->
+            "I/O error while searching directory: " + sourceDir +
+                    "\nError: " + error.getMessage();
+    };
+
+    error("File Discovery Error: " + errorMessage);
+
+    if (error.getCause() != null) {
+        error("Underlying cause: " + error.getCause().getMessage());
+    }
+}
+
+String promptUserForFile(Path filePath) {
+    info("\n" + "=".repeat(60));
+    info("File: " + filePath);
+    info("Size: " + getFileSize(filePath));
+    info("Last modified: " + getLastModified(filePath));
+    info("=".repeat(60));
+
+    displayFileContents(filePath);
+
+    info("\nWhat would you like to do with this file?");
+    info("  y/yes - Copy this file");
+    info("  n/no  - Skip this file");
+    info("  q/quit - Exit the application");
+
+    return readUserResponse();
+}
+
+String getFileSize(Path filePath) {
+    try {
+        var size = Files.size(filePath);
+        return formatFileSize(size);
+    } catch (IOException e) {
+        return "Unknown size";
+    }
+}
+
+String getLastModified(Path filePath) {
+    try {
+        var lastModified = Files.getLastModifiedTime(filePath);
+        return lastModified.toString();
+    } catch (IOException e) {
+        return "Unknown date";
+    }
+}
+
+// Shows first 20 lines to help user decide whether to copy
+void displayFileContents(Path filePath) {
+    try {
+        var lines = Files.readAllLines(filePath);
+        var totalLines = lines.size();
+
+        info("\nFile contents (" + totalLines + " lines):");
+        info("-".repeat(40));
+
+        var linesToShow = Math.min(20, totalLines);
+        for (var i = 0; i < linesToShow; i++) {
+            info(String.format("%3d: %s", i + 1, lines.get(i)));
+        }
+
+        if (totalLines > 20) {
+            info("... (" + (totalLines - 20) + " more lines)");
+        }
+
+        info("-".repeat(40));
+
+    } catch (IOException e) {
+        info("\nCould not read file contents: " + e.getMessage());
+    }
+}
+
+String readUserResponse() {
+    while (true) {
+        var input = System.console().readLine("\nYour choice [y/n/q]: ");
+
+        var response = parseUserResponse(input != null ? input.trim() : "");
+        if (response != null) {
+            return response;
+        }
+
+        info("Invalid response. Please enter:");
+        info("  y or yes - to copy the file");
+        info("  n or no  - to skip the file");
+        info("  q or quit - to exit the application");
+    }
+}
+
+String parseUserResponse(String input) {
+    if (input == null || input.isEmpty()) {
+        return null;
+    }
+
+    return switch (input.toLowerCase()) {
+        case "y", "yes" -> "y";
+        case "n", "no" -> "n";
+        case "q", "quit" -> "q";
+        default -> null;
+    };
+}
+
+UserAction processUserDecision(String response, Path filePath) {
+    return switch (response) {
+        case "y" -> new UserAction.Copy(filePath);
+        case "n" -> new UserAction.Skip(filePath);
+        case "q" -> new UserAction.Quit(filePath);
+        default -> throw new IllegalArgumentException("Invalid response: " + response);
+    };
+}
+
+/**
+ * Copies a file to the target directory with flat structure (no subdirectories)
+ * Handles file overwrite scenarios with user prompting
+ */
+OperationResult copyFile(Path sourceFile, Config config) {
+    try {
+        // Ensure target directory exists
+        if (!Files.exists(config.targetDirectory())) {
+            Files.createDirectories(config.targetDirectory());
+        }
+
+        // Create target path with flat structure (just filename, no subdirectories)
+        var fileName = sourceFile.getFileName();
+        var targetPath = config.targetDirectory().resolve(fileName);
+
+        // Handle file overwrite scenario
+        if (Files.exists(targetPath)) {
+            var overwriteDecision = promptForOverwrite(sourceFile, targetPath);
+            if (!overwriteDecision) {
+                return new OperationResult.Skip(sourceFile, "File already exists and user chose not to overwrite");
+            }
+        }
+
+        // Perform the file copy operation
+        Files.copy(sourceFile, targetPath, StandardCopyOption.REPLACE_EXISTING);
+
+        return new OperationResult.Success(sourceFile, targetPath);
+
+    } catch (IOException e) {
+        return handleCopyError(sourceFile, e);
+    } catch (Exception e) {
+        return new OperationResult.Error(sourceFile,
+                "Unexpected error during copy operation: " + e.getMessage(), e);
+    }
+}
+
+/**
+ * Prompts user whether to overwrite an existing file
+ * Returns true if user wants to overwrite, false otherwise
+ */
+boolean promptForOverwrite(Path sourceFile, Path targetPath) {
+    info("\n" + "!".repeat(60));
+    info("WARNING: File already exists in target directory!");
+    info("Source: " + sourceFile);
+    info("Target: " + targetPath);
+
+    try {
+        var targetSize = Files.size(targetPath);
+        var targetModified = Files.getLastModifiedTime(targetPath);
+        info("Existing file size: " + formatFileSize(targetSize));
+        info("Existing file modified: " + targetModified);
+    } catch (IOException e) {
+        info("Could not read existing file information: " + e.getMessage());
+    }
+
+    info("!".repeat(60));
+    info("Do you want to overwrite the existing file?");
+    info("  y/yes - Overwrite the existing file");
+    info("  n/no  - Skip this file (keep existing)");
+
+    while (true) {
+        var input = System.console().readLine("\nOverwrite? [y/n]: ");
+
+        if (input != null) {
+            var response = input.trim().toLowerCase();
+            switch (response) {
+                case "y", "yes" -> {
+                    return true;
+                }
+                case "n", "no" -> {
+                    return false;
                 }
                 default -> {
-                    if (args[i].startsWith("-")) {
-                        throw new IllegalArgumentException("Unknown option: " + args[i]);
-                    } else {
-                        throw new IllegalArgumentException("Unexpected argument: " + args[i]);
+                    info("Invalid response. Please enter 'y' for yes or 'n' for no.");
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Formats file size in human-readable format
+ */
+String formatFileSize(long size) {
+    if (size < 1024) {
+        return size + " bytes";
+    } else if (size < 1024 * 1024) {
+        return String.format("%.1f KB", size / 1024.0);
+    } else {
+        return String.format("%.1f MB", size / (1024.0 * 1024.0));
+    }
+}
+
+/**
+ * Handles copy operation errors with specific error messages
+ */
+OperationResult.Error handleCopyError(Path sourceFile, IOException error) {
+    var errorMessage = switch (error.getClass().getSimpleName()) {
+        case "AccessDeniedException" ->
+            "Access denied - insufficient permissions to copy file";
+        case "NoSuchFileException" ->
+            "Source file no longer exists or target directory path is invalid";
+        case "FileAlreadyExistsException" ->
+            "Target file already exists and cannot be overwritten";
+        case "DirectoryNotEmptyException" ->
+            "Target path exists as a non-empty directory";
+        case "FileSystemException" ->
+            "File system error - disk may be full or file system corrupted";
+        case "SecurityException" ->
+            "Security restriction prevents file copy operation";
+        default ->
+            "I/O error during file copy: " + error.getMessage();
+    };
+
+    return new OperationResult.Error(sourceFile, errorMessage, error);
+}
+
+void main(String[] args) {
+    info("ZFSL - Zero Dependencies File Selection and Copy Tool");
+    info("====================================================");
+
+    var console = System.console();
+    if (console == null) {
+        error("\nError: No console available.");
+        error("ZFSL requires a terminal/console for interactive input.");
+        error("Please run this application from a command line terminal, not from an IDE.");
+        System.exit(1);
+    }
+
+    try {
+        var config = parseArguments(args);
+        validateConfiguration(config);
+
+        info("\nConfiguration:");
+        info("Source directory: " + config.sourceDirectory());
+        info("Target directory: " + config.targetDirectory());
+        info("File extension: " + config.normalizedExtension());
+        info("");
+
+        var discoveredFiles = discoverFiles(config);
+
+        if (discoveredFiles.isEmpty()) {
+            info("No files found with extension " + config.normalizedExtension() +
+                    " in directory: " + config.sourceDirectory());
+            return;
+        }
+
+        info("Found " + discoveredFiles.size() + " file(s) matching extension " +
+                config.normalizedExtension());
+
+        // Initialize processing state
+        var state = ProcessingState.initial().withTotalFiles(discoveredFiles.size());
+
+        // Main processing loop - handle user decisions for each file
+        for (var filePath : discoveredFiles) {
+            var userResponse = promptUserForFile(filePath);
+            var userAction = processUserDecision(userResponse, filePath);
+
+            // Handle quit action separately to exit the loop
+            if (userAction instanceof UserAction.Quit quit) {
+                info("User requested to quit. Stopping processing...");
+                var quitResult = new OperationResult.Skip(quit.filePath(), "User quit before processing");
+                state = state.withResult(quitResult);
+                break; // Exit the processing loop early
+            }
+
+            // Process copy and skip actions
+            var result = switch (userAction) {
+                case UserAction.Copy copy -> {
+                    info("Copying file: " + copy.filePath());
+                    yield copyFile(copy.filePath(), config);
+                }
+                case UserAction.Skip skip -> {
+                    info("Skipping file: " + skip.filePath());
+                    yield new OperationResult.Skip(skip.filePath(), "User chose to skip");
+                }
+                case UserAction.Quit quit ->
+                    throw new IllegalStateException("Quit action should have been handled above");
+            };
+
+            // Update processing state with the result
+            state = state.withResult(result);
+
+            // Display result of the operation using modern text formatting
+            switch (result) {
+                case OperationResult.Success success ->
+                    info("✓ Successfully copied to: " + success.target());
+                case OperationResult.Skip skip ->
+                    info("- Skipped: " + skip.reason());
+                case OperationResult.Error error -> {
+                    info("✗ Error: " + error.message());
+                    if (error.cause() != null) {
+                        error("  Cause: " + error.cause().getMessage());
                     }
                 }
             }
         }
 
-        // Prompt for missing required values
-        if (targetDirectory == null) {
-            var targetInput = promptForInput("Enter target directory");
-            if (targetInput.isEmpty()) {
-                throw new IllegalArgumentException("Target directory cannot be empty");
-            }
-            targetDirectory = Path.of(targetInput);
-        }
+        // Display comprehensive operation summary with detailed error reporting
+        state.displaySummary();
 
-        if (fileExtension == null) {
-            var extensionInput = promptForInput("Enter file extension (e.g., .java, txt)");
-            if (extensionInput.isEmpty()) {
-                throw new IllegalArgumentException("File extension cannot be empty");
-            }
-            fileExtension = extensionInput;
-        }
-
-        return new Config(sourceDirectory, targetDirectory, fileExtension);
+    } catch (IllegalArgumentException e) {
+        error("Error: " + e.getMessage());
+        error("\nUse --help for usage information.");
+        System.exit(1);
+    } catch (Exception e) {
+        error("Unexpected error: " + e.getMessage());
+        e.printStackTrace();
+        System.exit(1);
     }
-
-    static void validateConfiguration(Config config) {
-        if (!config.isSourceValid()) {
-            if (!Files.exists(config.sourceDirectory())) {
-                throw new IllegalArgumentException(
-                        "Source directory does not exist: " + config.sourceDirectory());
-            }
-            if (!Files.isDirectory(config.sourceDirectory())) {
-                throw new IllegalArgumentException(
-                        "Source path is not a directory: " + config.sourceDirectory());
-            }
-            if (!Files.isReadable(config.sourceDirectory())) {
-                throw new IllegalArgumentException(
-                        "Source directory is not readable: " + config.sourceDirectory());
-            }
-        }
-
-        if (!config.isTargetValid()) {
-            if (Files.exists(config.targetDirectory()) && !Files.isDirectory(config.targetDirectory())) {
-                throw new IllegalArgumentException(
-                        "Target path exists but is not a directory: " + config.targetDirectory());
-            }
-            if (Files.exists(config.targetDirectory()) && !Files.isWritable(config.targetDirectory())) {
-                throw new IllegalArgumentException(
-                        "Target directory is not writable: " + config.targetDirectory());
-            }
-            var parent = config.targetDirectory().getParent();
-            if (parent != null && (!Files.exists(parent) || !Files.isWritable(parent))) {
-                throw new IllegalArgumentException(
-                        "Cannot create target directory (parent not writable): " + config.targetDirectory());
-            }
-        }
-
-        // Validate file extension format
-        var extension = config.normalizedExtension();
-        if (extension.length() <= 1) {
-            throw new IllegalArgumentException("File extension must contain at least one character after the dot");
-        }
-    }
-
-    static List<Path> discoverFiles(Config config) {
-        var extension = config.normalizedExtension();
-        var sourceDir = config.sourceDirectory();
-
-        try (var fileStream = Files.walk(sourceDir)) {
-            return fileStream
-                    .filter(Files::isRegularFile)
-                    .filter(path -> {
-                        var fileName = path.getFileName().toString();
-                        return fileName.endsWith(extension);
-                    })
-                    .collect(Collectors.toList());
-
-        } catch (IOException e) {
-            handleFileDiscoveryError(sourceDir, e);
-            return List.of();
-        }
-    }
-
-    static void handleFileDiscoveryError(Path sourceDir, IOException error) {
-        var errorMessage = switch (error.getClass().getSimpleName()) {
-            case "AccessDeniedException" ->
-                "Access denied while searching directory: " + sourceDir +
-                        "\nCheck file permissions and try again.";
-            case "NoSuchFileException" ->
-                "Directory not found: " + sourceDir +
-                        "\nVerify the path exists and try again.";
-            case "FileSystemException" ->
-                "File system error while accessing: " + sourceDir +
-                        "\nThe directory may be on an unavailable network drive or corrupted file system.";
-            default ->
-                "I/O error while searching directory: " + sourceDir +
-                        "\nError: " + error.getMessage();
-        };
-
-        System.err.println("File Discovery Error: " + errorMessage);
-
-        if (error.getCause() != null) {
-            System.err.println("Underlying cause: " + error.getCause().getMessage());
-        }
-    }
-
-    static String promptUserForFile(Path filePath) {
-        System.out.println("\n" + "=".repeat(60));
-        System.out.println("File: " + filePath);
-        System.out.println("Size: " + getFileSize(filePath));
-        System.out.println("Last modified: " + getLastModified(filePath));
-        System.out.println("=".repeat(60));
-
-        displayFileContents(filePath);
-
-        System.out.println("\nWhat would you like to do with this file?");
-        System.out.println("  y/yes - Copy this file");
-        System.out.println("  n/no  - Skip this file");
-        System.out.println("  q/quit - Exit the application");
-
-        return readUserResponse();
-    }
-
-    static String getFileSize(Path filePath) {
-        try {
-            var size = Files.size(filePath);
-            if (size < 1024) {
-                return size + " bytes";
-            } else if (size < 1024 * 1024) {
-                return String.format("%.1f KB", size / 1024.0);
-            } else {
-                return String.format("%.1f MB", size / (1024.0 * 1024.0));
-            }
-        } catch (IOException e) {
-            return "Unknown size";
-        }
-    }
-
-    static String getLastModified(Path filePath) {
-        try {
-            var lastModified = Files.getLastModifiedTime(filePath);
-            return lastModified.toString();
-        } catch (IOException e) {
-            return "Unknown date";
-        }
-    }
-
-    // Shows first 20 lines to help user decide whether to copy
-    static void displayFileContents(Path filePath) {
-        try {
-            var lines = Files.readAllLines(filePath);
-            var totalLines = lines.size();
-
-            System.out.println("\nFile contents (" + totalLines + " lines):");
-            System.out.println("-".repeat(40));
-
-            var linesToShow = Math.min(20, totalLines);
-            for (var i = 0; i < linesToShow; i++) {
-                System.out.println(String.format("%3d: %s", i + 1, lines.get(i)));
-            }
-
-            if (totalLines > 20) {
-                System.out.println("... (" + (totalLines - 20) + " more lines)");
-            }
-
-            System.out.println("-".repeat(40));
-
-        } catch (IOException e) {
-            System.out.println("\nCould not read file contents: " + e.getMessage());
-        }
-    }
-
-    // Loops until valid response, handles both console and scanner input
-    static String readUserResponse() {
-        var console = System.console();
-        var scanner = (Scanner) null;
-
-        if (console == null) {
-            scanner = new Scanner(System.in);
-        }
-
-        while (true) {
-            System.out.print("\nYour choice [y/n/q]: ");
-
-            var input = (String) null;
-            if (console != null) {
-                input = console.readLine();
-            } else {
-                input = scanner.nextLine();
-            }
-
-            if (input == null) {
-                input = "";
-            }
-
-            var response = parseUserResponse(input.trim());
-            if (response != null) {
-                return response;
-            }
-
-            System.out.println("Invalid response. Please enter:");
-            System.out.println("  y or yes - to copy the file");
-            System.out.println("  n or no  - to skip the file");
-            System.out.println("  q or quit - to exit the application");
-        }
-    }
-
-    static String parseUserResponse(String input) {
-        if (input == null || input.isEmpty()) {
-            return null;
-        }
-
-        return switch (input.toLowerCase()) {
-            case "y", "yes" -> "y";
-            case "n", "no" -> "n";
-            case "q", "quit" -> "q";
-            default -> null;
-        };
-    }
-
-    static UserAction processUserDecision(String response, Path filePath) {
-        return switch (response) {
-            case "y" -> new UserAction.Copy(filePath);
-            case "n" -> new UserAction.Skip(filePath);
-            case "q" -> new UserAction.Quit(filePath);
-            default -> throw new IllegalArgumentException("Invalid response: " + response);
-        };
-    }
-
-    public static void main(String[] args) {
-        System.out.println("ZFSL - Zero Dependencies File Selection and Copy Tool");
-        System.out.println("====================================================");
-
-        try {
-            var config = parseArguments(args);
-            validateConfiguration(config);
-
-            System.out.println("\nConfiguration:");
-            System.out.println("Source directory: " + config.sourceDirectory());
-            System.out.println("Target directory: " + config.targetDirectory());
-            System.out.println("File extension: " + config.normalizedExtension());
-            System.out.println("");
-
-            var discoveredFiles = discoverFiles(config);
-
-            if (discoveredFiles.isEmpty()) {
-                System.out.println("No files found with extension " + config.normalizedExtension() +
-                        " in directory: " + config.sourceDirectory());
-                return;
-            }
-
-            System.out.println("Found " + discoveredFiles.size() + " file(s) matching extension " +
-                    config.normalizedExtension());
-
-            // TODO: Implement user interaction loop
-            // TODO: Implement file copying
-            // TODO: Display operation summary
-
-            System.out.println("File discovery completed successfully!");
-
-        } catch (IllegalArgumentException e) {
-            System.err.println("Error: " + e.getMessage());
-            System.err.println("\nUse --help for usage information.");
-            System.exit(1);
-        } catch (Exception e) {
-            System.err.println("Unexpected error: " + e.getMessage());
-            e.printStackTrace();
-            System.exit(1);
-        }
-    }
-
 }
