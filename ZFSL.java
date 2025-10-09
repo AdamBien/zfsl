@@ -7,6 +7,7 @@
 import java.nio.file.*;
 
 
+
 record Config(
         Path sourceDirectory,
         Path targetDirectory,
@@ -291,6 +292,7 @@ List<Path> discoverFiles(Config config) {
                     var fileName = path.getFileName().toString();
                     return fileName.endsWith(extension);
                 })
+                .sorted()
                 .toList();
 
     } catch (IOException e) {
