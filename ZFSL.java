@@ -6,7 +6,7 @@
 
 import java.nio.file.*;
 
-
+String version = "2025.10.09.01";
 
 record Config(
         Path sourceDirectory,
@@ -161,7 +161,7 @@ static void notifyAndQuit(String message) {
 
 void displayHelp() {
     info("""
-            ZFSL - Zero Dependencies File Selection and Copy Tool
+            ZFSL %s - Zero Dependencies File Selection and Copy Tool
             ====================================================
 
             Usage: java ZFSL.java [OPTIONS]
@@ -180,7 +180,7 @@ void displayHelp() {
             Interactive Mode:
               If target directory or file extension are not provided, you will be prompted
               to enter them interactively.
-            """);
+            """.formatted(version));
 }
 
 String promptForInput(String prompt) {
@@ -189,11 +189,11 @@ String promptForInput(String prompt) {
 }
 
 Config parseArguments(String[] args) {
-    var sourceDirectory = Path.of(System.getProperty("user.dir")); // Default to current directory
+    var workingDir = System.getProperty("user.dir");
+    var sourceDirectory = Path.of(workingDir);
     var targetDirectory = (Path) null;
     var fileExtension = (String) null;
 
-    // Parse arguments using modern switch expressions
     for (var i = 0; i < args.length; i++) {
         switch (args[i]) {
             case "-h", "--help" -> {
