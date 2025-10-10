@@ -4,9 +4,14 @@
  * Interactive CLI application for selective file copying
  */
 
+import java.io.IOException;
 import java.nio.file.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 
 String version = "2025.10.10.01";
+int maxPreviewLines = 40;
 
 record Config(
         Path sourceDirectory,
@@ -132,7 +137,11 @@ sealed interface UserAction
 }
 
 static void info(String message) {
-    System.out.println(message);
+    IO.println(message);
+}
+
+static void clearScreen(){
+    IO.println("\033c");
 }
 
 static void error(String message) {
@@ -148,7 +157,7 @@ static void notifyAndQuit(String message) {
 void displayHelp() {
     info("""
             ZFSL %s - Zero Dependencies File Selection and Copy Tool
-            ====================================================
+            ========================================================
 
             Usage: java ZFSL.java [OPTIONS]
 
@@ -307,6 +316,7 @@ void handleFileDiscoveryError(Path sourceDir, IOException error) {
 }
 
 String promptUserForFile(Path filePath) {
+    clearScreen();
     info("\n" + "=".repeat(60));
     info("File: " + filePath);
     info("Size: " + getFileSize(filePath));
@@ -349,7 +359,7 @@ void displayFileContents(Path filePath) {
         info("\nFile contents (" + totalLines + " lines):");
         info("-".repeat(40));
 
-        var linesToShow = Math.min(20, totalLines);
+        var linesToShow = Math.min(maxPreviewLines, totalLines);
         for (var i = 0; i < linesToShow; i++) {
             info(String.format("%3d: %s", i + 1, lines.get(i)));
         }
@@ -442,10 +452,6 @@ OperationResult copyFile(Path sourceFile, Config config) {
     }
 }
 
-/**
- * Prompts user whether to overwrite an existing file
- * Returns true if user wants to overwrite, false otherwise
- */
 boolean promptForOverwrite(Path sourceFile, Path targetPath) {
     info("\n" + "!".repeat(60));
     info("WARNING: File already exists in target directory!");
@@ -518,7 +524,7 @@ OperationResult.Error handleCopyError(Path sourceFile, IOException error) {
 }
 
 void main(String[] args) throws Exception{
-    info("ZFSL - Zero Dependencies File Selection and Copy Tool");
+    info("ZFSL (%s) - Zero Dependencies File Selection and Copy Tool".formatted(version));
     info("====================================================");
 
     var console = System.console();
@@ -549,23 +555,19 @@ void main(String[] args) throws Exception{
         info("Found " + discoveredFiles.size() + " file(s) matching extension " +
                 config.normalizedExtension());
 
-        // Initialize processing state
         var state = ProcessingState.initial().withTotalFiles(discoveredFiles.size());
 
-        // Main processing loop - handle user decisions for each file
         for (var filePath : discoveredFiles) {
             var userResponse = promptUserForFile(filePath);
             var userAction = processUserDecision(userResponse, filePath);
 
-            // Handle quit action separately to exit the loop
             if (userAction instanceof UserAction.Quit quit) {
                 info("User requested to quit. Stopping processing...");
                 var quitResult = new OperationResult.Skip(quit.filePath(), "User quit before processing");
                 state = state.withResult(quitResult);
-                break; // Exit the processing loop early
+                break; 
             }
 
-            // Process copy and skip actions
             var result = switch (userAction) {
                 case UserAction.Copy copy -> {
                     info("Copying file: " + copy.filePath());
@@ -579,10 +581,7 @@ void main(String[] args) throws Exception{
                     throw new IllegalStateException("Quit action should have been handled above");
             };
 
-            // Update processing state with the result
             state = state.withResult(result);
-
-            // Display result of the operation using modern text formatting
             switch (result) {
                 case OperationResult.Success success ->
                     info("✓ Successfully copied to: " + success.target());
@@ -597,7 +596,6 @@ void main(String[] args) throws Exception{
             }
         }
 
-        // Display comprehensive operation summary with detailed error reporting
         state.displaySummary();
 
 }
