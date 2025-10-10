@@ -6,7 +6,7 @@
 
 import java.nio.file.*;
 
-String version = "2025.10.09.01";
+String version = "2025.10.10.01";
 
 record Config(
         Path sourceDirectory,
@@ -31,7 +31,6 @@ record Config(
         if (Files.exists(targetDirectory)) {
             return Files.isDirectory(targetDirectory) && Files.isWritable(targetDirectory);
         }
-        // Check if parent directory exists and is writable for creation
         var parent = targetDirectory.getParent();
         return parent != null && Files.exists(parent) && Files.isWritable(parent);
     }
@@ -44,14 +43,9 @@ record Config(
 sealed interface OperationResult
         permits OperationResult.Success, OperationResult.Skip, OperationResult.Error {
 
-    record Success(Path source, Path target) implements OperationResult {
-    }
-
-    record Skip(Path source, String reason) implements OperationResult {
-    }
-
-    record Error(Path source, String message, Throwable cause) implements OperationResult {
-    }
+    record Success(Path source, Path target) implements OperationResult {}
+    record Skip(Path source, String reason) implements OperationResult {}
+    record Error(Path source, String message, Throwable cause) implements OperationResult {}
 }
 
 record ProcessingState(
@@ -96,8 +90,6 @@ record ProcessingState(
 
     void displaySummary() {
         info(formatSummary());
-
-        // Display detailed error reporting if there were any errors
         if (errorFiles > 0) {
             displayDetailedErrorReport();
         }
@@ -126,7 +118,7 @@ record ProcessingState(
             }
 
             if (i < errorResults.size() - 1) {
-                info(""); // Add spacing between errors
+                info(""); 
             }
         }
     }
@@ -134,15 +126,9 @@ record ProcessingState(
 
 sealed interface UserAction
         permits UserAction.Copy, UserAction.Skip, UserAction.Quit {
-
-    record Copy(Path filePath) implements UserAction {
-    }
-
-    record Skip(Path filePath) implements UserAction {
-    }
-
-    record Quit(Path filePath) implements UserAction {
-    }
+    record Copy(Path filePath) implements UserAction {}
+    record Skip(Path filePath) implements UserAction {}
+    record Quit(Path filePath) implements UserAction {}
 }
 
 static void info(String message) {
@@ -227,8 +213,6 @@ Config parseArguments(String[] args) {
             }
         }
     }
-
-    // Prompt for missing required values
     if (targetDirectory == null) {
         var targetInput = promptForInput("Enter target directory");
         if (targetInput.isEmpty()) {
@@ -238,7 +222,7 @@ Config parseArguments(String[] args) {
     }
 
     if (fileExtension == null) {
-        var extensionInput = promptForInput("Enter file extension (e.g., .java, txt)");
+        var extensionInput = promptForInput("Enter file extension (e.g., .java, .txt)");
         if (extensionInput.isEmpty()) {
             notifyAndQuit("File extension cannot be empty");
         }
@@ -273,8 +257,6 @@ void validateConfiguration(Config config) {
             notifyAndQuit("Cannot create target directory (parent not writable): " + config.targetDirectory());
         }
     }
-
-    // Validate file extension format
     var extension = config.normalizedExtension();
     if (extension.length() <= 1) {
         notifyAndQuit("File extension must contain at least one character after the dot");
@@ -359,7 +341,6 @@ String getLastModified(Path filePath) {
     }
 }
 
-// Shows first 20 lines to help user decide whether to copy
 void displayFileContents(Path filePath) {
     try {
         var lines = Files.readAllLines(filePath);
@@ -420,7 +401,7 @@ UserAction processUserDecision(String response, Path filePath) {
         case "q" -> new UserAction.Quit(filePath);
         default -> {
             notifyAndQuit("Invalid response: " + response);
-            yield null; // unreachable, but required for compilation
+            yield null; 
         }
     };
 }
@@ -505,9 +486,6 @@ boolean promptForOverwrite(Path sourceFile, Path targetPath) {
     }
 }
 
-/**
- * Formats file size in human-readable format
- */
 String formatFileSize(long size) {
     if (size < 1024) {
         return size + " bytes";
@@ -518,9 +496,6 @@ String formatFileSize(long size) {
     }
 }
 
-/**
- * Handles copy operation errors with specific error messages
- */
 OperationResult.Error handleCopyError(Path sourceFile, IOException error) {
     var errorMessage = switch (error.getClass().getSimpleName()) {
         case "AccessDeniedException" ->
